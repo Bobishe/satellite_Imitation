@@ -61,13 +61,17 @@ class MonitoringSimulation(simple_sim.Simulation):
 def main():
     n0 = simple_sim.Node(0, 55.751244, 37.618423)      # Москва
     n1 = simple_sim.Node(1, 59.93106, 30.36057)        # Санкт-Петербург
-    ch = simple_sim.Channel(n0, n1, extra_delay_ms=2.0, loss_prob=0.01)
+    ch = simple_sim.Channel(n0, n1,
+                           extra_delay_ms=2.0,
+                           loss_prob=0.01,
+                           call_loss_prob=0.05)
 
     sim = MonitoringSimulation([n0, n1],
                                {(0, 1): ch},
                                end_time_ms=30_000.0,   # 30 с
                                bin_ms=1000)            # шаг 1 с
     simple_sim.PoissonGenerator(rate_pps=10, src=n0, dst=n1, sim=sim)
+    simple_sim.CallGenerator(rate_cps=0.2, src=n0, dst=n1, sim=sim)
     sim.run()                                          # запуск модели
 
     # ── визуализация ──────────────────────────────────────────────────────────
