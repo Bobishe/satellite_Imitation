@@ -46,11 +46,13 @@ class Channel:
                  b: Node,
                  extra_delay_ms: float = 0.0,
                  loss_prob: float = 0.0,
+                 call_loss_prob: float = 0.0,
                  rate_pps: float | None = None,
                  queue_limit: int | None = None):
         self.a, self.b = a, b
         self.extra_delay_ms = extra_delay_ms
         self.loss_prob = loss_prob
+        self.call_loss_prob = call_loss_prob
         self.rate_pps = rate_pps
         self.queue_limit = queue_limit
 
@@ -78,6 +80,9 @@ class Channel:
     def is_lost(self) -> bool:
         return random.random() < self.loss_prob
 
+    def is_call_lost(self) -> bool:
+        return random.random() < self.call_loss_prob
+
 # ---------- генератор трафика -------------------------------------------------
 class PoissonGenerator:
     def __init__(self, rate_pps: float, src: Node, dst: Node, sim: "Simulation"):
@@ -93,6 +98,20 @@ class PoissonGenerator:
         self.sim.on_packet_created(pkt)
         self._schedule_next(self.sim.now)
 
+# ---------- генератор вызовов -------------------------------------------------
+class CallGenerator:
+    def __init__(self, rate_cps: float, src: Node, dst: Node, sim: "Simulation"):
+        self.rate_cps, self.src, self.dst, self.sim = rate_cps, src, dst, sim
+        self._schedule_next(self.sim.now)
+
+    def _schedule_next(self, t_ms: float):
+        interval_ms = random.expovariate(self.rate_cps) * 1000.0
+        self.sim.schedule(t_ms + interval_ms, 1, self._attempt)
+
+    def _attempt(self):
+        self.sim.on_call_attempt(self.src.node_id, self.dst.node_id)
+        self._schedule_next(self.sim.now)
+
 # ---------- симулятор ---------------------------------------------------------
 class Simulation:
     def __init__(self, nodes: List[Node], channels: Dict[Tuple[int, int], Channel], end_time_ms: float):
@@ -105,6 +124,8 @@ class Simulation:
         # метрики
         self.sent = self.delivered = self.lost = 0
         self.delay_sum = self.delay_sq_sum = 0.0
+        # call metrics
+        self.call_attempts = self.call_failures = 0
 
     # API для генераторов/каналов
     def on_packet_created(self, pkt: Packet):
@@ -122,6 +143,13 @@ class Simulation:
         self.delivered += 1
         self.delay_sum += delay_ms
         self.delay_sq_sum += delay_ms ** 2
+
+    # обработка попытки вызова
+    def on_call_attempt(self, src_id: int, dst_id: int):
+        self.call_attempts += 1
+        ch = self.channels[(src_id, dst_id)]
+        if ch.is_call_lost():
+            self.call_failures += 1
 
     # движок событий
     def schedule(self, time_ms: float, priority: int, action: Callable):
@@ -142,11 +170,16 @@ class Simulation:
         avg_delay = self.delay_sum / delivered
         var_delay = (self.delay_sq_sum / delivered) - avg_delay ** 2
         loss_rate = self.lost / max(self.sent, 1)
+        call_loss_rate = self.call_failures / max(self.call_attempts, 1)
         with open(fname, "w", newline="") as f:
             csv.writer(f).writerow(
-                ["total_sent", "delivered", "lost", "loss_rate", "avg_delay_ms", "delay_var"])
+                ["total_sent", "delivered", "lost", "loss_rate", "avg_delay_ms",
+                 "delay_var", "call_attempts", "call_failures", "call_loss_rate"])
             csv.writer(f).writerow(
-                [self.sent, self.delivered, self.lost, f"{loss_rate:.6f}", f"{avg_delay:.3f}", f"{var_delay:.3f}"])
+                [self.sent, self.delivered, self.lost, f"{loss_rate:.6f}",
+                 f"{avg_delay:.3f}", f"{var_delay:.3f}",
+                 self.call_attempts, self.call_failures,
+                 f"{call_loss_rate:.6f}"])
         print(f"Metrics written to {fname}")
 
 # ---------- утилиты -----------------------------------------------------------
@@ -166,8 +199,10 @@ if __name__ == "__main__":
     ch = Channel(n0, n1,
                  extra_delay_ms=2.0,
                  loss_prob=0.01,
+                 call_loss_prob=0.05,
                  rate_pps=5,
                  queue_limit=20)
     sim = Simulation([n0, n1], {(0, 1): ch}, end_time_ms=30_000.0)
     PoissonGenerator(rate_pps=10, src=n0, dst=n1, sim=sim)
+    CallGenerator(rate_cps=0.2, src=n0, dst=n1, sim=sim)
     sim.run()

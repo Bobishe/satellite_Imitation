@@ -1,2 +1,2 @@
-total_sent,delivered,lost,loss_rate,avg_delay_ms,delay_var
-293,288,5,0.017065,2.002,-0.000
+total_sent,delivered,lost,loss_rate,avg_delay_ms,delay_var,call_attempts,call_failures,call_loss_rate
+307,305,2,0.006515,2.002,-0.000,7,1,0.142857
