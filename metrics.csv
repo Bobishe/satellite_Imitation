@@ -1,0 +1,2 @@
+total_sent,delivered,lost,loss_rate,avg_delay_ms,delay_var
+293,288,5,0.017065,2.002,-0.000
