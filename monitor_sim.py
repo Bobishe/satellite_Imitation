@@ -7,8 +7,8 @@ import simple_sim
 
 # ── расширение симулятора ─────────────────────────────────────────────────────
 class MonitoringSimulation(simple_sim.Simulation):
-    def __init__(self, nodes, channels, end_time_ms, bin_ms=1000):
-        super().__init__(nodes, channels, end_time_ms)
+    def __init__(self, nodes, channels, end_time_ms, bin_ms=1000, metrics_fname="metrics.csv"):
+        super().__init__(nodes, channels, end_time_ms, metrics_fname=metrics_fname)
         self.bin_ms = bin_ms                 # ширина «окна» в миллисекундах
         self.timeline = []                   # список словарей с метриками
         self._reset_bin()
@@ -58,20 +58,25 @@ class MonitoringSimulation(simple_sim.Simulation):
         super().schedule(time_ms, priority, wrapped)
 
 # ── основной запуск ───────────────────────────────────────────────────────────
-def main():
-    n0 = simple_sim.Node(0, 55.751244, 37.618423)      # Москва
-    n1 = simple_sim.Node(1, 59.93106, 30.36057)        # Санкт-Петербург
-    ch = simple_sim.Channel(n0, n1,
-                           extra_delay_ms=2.0,
-                           loss_prob=0.01,
-                           call_loss_prob=0.05)
+def main(cfg_path="config.json"):
+    cfg = simple_sim.load_config(cfg_path)
+    sim = simple_sim.build_simulation(cfg)
+    # заменяем базовый симулятор на мониторинговый
+    sim = MonitoringSimulation(
+        list(sim.nodes.values()),
+        sim.channels,
+        end_time_ms=sim.end_time_ms,
+        bin_ms=cfg.get("bin_ms", 1000),
+        metrics_fname=sim.metrics_fname,
+    )
 
-    sim = MonitoringSimulation([n0, n1],
-                               {(0, 1): ch},
-                               end_time_ms=30_000.0,   # 30 с
-                               bin_ms=1000)            # шаг 1 с
-    simple_sim.PoissonGenerator(rate_pps=10, src=n0, dst=n1, sim=sim)
-    simple_sim.CallGenerator(rate_cps=0.2, src=n0, dst=n1, sim=sim)
+    # генераторы заново поскольку они привязаны к экземпляру симулятора
+    for gen in cfg.get("packet_generators", []):
+        simple_sim.PoissonGenerator(gen["rate_pps"], sim.nodes[gen["src"]], sim.nodes[gen["dst"]], sim)
+
+    for gen in cfg.get("call_generators", []):
+        simple_sim.CallGenerator(gen["rate_cps"], sim.nodes[gen["src"]], sim.nodes[gen["dst"]], sim)
+
     sim.run()                                          # запуск модели
 
     # ── визуализация ──────────────────────────────────────────────────────────
@@ -93,4 +98,10 @@ def main():
     plt.show()
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run monitoring simulation from config")
+    parser.add_argument("--config", default="config.json", help="Path to JSON configuration")
+    args = parser.parse_args()
+
+    main(args.config)

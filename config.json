@@ -1,0 +1,19 @@
+{
+    "nodes": [
+        {"id": 0, "lat": 55.751244, "lon": 37.618423},
+        {"id": 1, "lat": 59.93106, "lon": 30.36057}
+    ],
+    "channels": [
+        {"src": 0, "dst": 1, "extra_delay_ms": 2.0, "loss_prob": 0.01, "call_loss_prob": 0.05,
+         "rate_pps": 5, "queue_limit": 20}
+    ],
+    "packet_generators": [
+        {"src": 0, "dst": 1, "rate_pps": 10}
+    ],
+    "call_generators": [
+        {"src": 0, "dst": 1, "rate_cps": 0.2}
+    ],
+    "end_time_ms": 30000,
+    "metrics_file": "metrics.csv"
+}
+
