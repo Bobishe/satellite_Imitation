@@ -9,6 +9,7 @@
 
 import csv
 import heapq
+import json
 import math
 import random
 from dataclasses import dataclass, field
@@ -114,10 +115,12 @@ class CallGenerator:
 
 # ---------- симулятор ---------------------------------------------------------
 class Simulation:
-    def __init__(self, nodes: List[Node], channels: Dict[Tuple[int, int], Channel], end_time_ms: float):
+    def __init__(self, nodes: List[Node], channels: Dict[Tuple[int, int], Channel], end_time_ms: float,
+                 metrics_fname: str = "metrics.csv"):
         self.nodes = {n.node_id: n for n in nodes}
         self.channels = channels
         self.end_time_ms = end_time_ms
+        self.metrics_fname = metrics_fname
         self.event_queue: List[Event] = []
         self.now = 0.0
 
@@ -165,13 +168,13 @@ class Simulation:
         self._write_metrics()
 
     # вывод метрик
-    def _write_metrics(self, fname: str = "metrics.csv"):
+    def _write_metrics(self):
         delivered = max(self.delivered, 1)
         avg_delay = self.delay_sum / delivered
         var_delay = (self.delay_sq_sum / delivered) - avg_delay ** 2
         loss_rate = self.lost / max(self.sent, 1)
         call_loss_rate = self.call_failures / max(self.call_attempts, 1)
-        with open(fname, "w", newline="") as f:
+        with open(self.metrics_fname, "w", newline="") as f:
             csv.writer(f).writerow(
                 ["total_sent", "delivered", "lost", "loss_rate", "avg_delay_ms",
                  "delay_var", "call_attempts", "call_failures", "call_loss_rate"])
@@ -180,7 +183,7 @@ class Simulation:
                  f"{avg_delay:.3f}", f"{var_delay:.3f}",
                  self.call_attempts, self.call_failures,
                  f"{call_loss_rate:.6f}"])
-        print(f"Metrics written to {fname}")
+        print(f"Metrics written to {self.metrics_fname}")
 
 # ---------- утилиты -----------------------------------------------------------
 def _haversine_km(lat1, lon1, lat2, lon2):
@@ -189,20 +192,59 @@ def _haversine_km(lat1, lon1, lat2, lon2):
     h = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
     return 6371.0 * 2 * math.asin(math.sqrt(h))  # км
 
+
+def load_config(path: str) -> dict:
+    """Load simulation configuration from JSON file."""
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def build_simulation(cfg: dict) -> Simulation:
+    """Build Simulation instance from configuration dictionary."""
+    nodes: List[Node] = []
+    node_map: Dict[int, Node] = {}
+    for n in cfg.get("nodes", []):
+        node = Node(n["id"], n["lat"], n["lon"], n.get("alt", 0.0))
+        nodes.append(node)
+        node_map[node.node_id] = node
+
+    channels: Dict[Tuple[int, int], Channel] = {}
+    for ch in cfg.get("channels", []):
+        a = node_map[ch["src"]]
+        b = node_map[ch["dst"]]
+        channels[(a.node_id, b.node_id)] = Channel(
+            a,
+            b,
+            extra_delay_ms=ch.get("extra_delay_ms", 0.0),
+            loss_prob=ch.get("loss_prob", 0.0),
+            call_loss_prob=ch.get("call_loss_prob", 0.0),
+            rate_pps=ch.get("rate_pps"),
+            queue_limit=ch.get("queue_limit"),
+        )
+
+    sim = Simulation(
+        nodes,
+        channels,
+        end_time_ms=cfg.get("end_time_ms", 0),
+        metrics_fname=cfg.get("metrics_file", "metrics.csv"),
+    )
+
+    for gen in cfg.get("packet_generators", []):
+        PoissonGenerator(gen["rate_pps"], node_map[gen["src"]], node_map[gen["dst"]], sim)
+
+    for gen in cfg.get("call_generators", []):
+        CallGenerator(gen["rate_cps"], node_map[gen["src"]], node_map[gen["dst"]], sim)
+
+    return sim
+
 # ---------- демонстрация ------------------------------------------------------
 if __name__ == "__main__":
-    # Два узла: Москва → Санкт-Петербург, канал 2 мс + 1 % потерь.
-    # Пропускная способность 5 pkt/s, очередь на 20 пакетов,
-    # генератор выдает 10 pkt/s в течение 30 секунд.
-    n0 = Node(0, 55.751244, 37.618423)
-    n1 = Node(1, 59.93106, 30.36057)
-    ch = Channel(n0, n1,
-                 extra_delay_ms=2.0,
-                 loss_prob=0.01,
-                 call_loss_prob=0.05,
-                 rate_pps=5,
-                 queue_limit=20)
-    sim = Simulation([n0, n1], {(0, 1): ch}, end_time_ms=30_000.0)
-    PoissonGenerator(rate_pps=10, src=n0, dst=n1, sim=sim)
-    CallGenerator(rate_cps=0.2, src=n0, dst=n1, sim=sim)
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run simulation from config file")
+    parser.add_argument("--config", default="config.json", help="Path to JSON configuration")
+    args = parser.parse_args()
+
+    cfg = load_config(args.config)
+    sim = build_simulation(cfg)
     sim.run()
