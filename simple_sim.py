@@ -14,6 +14,7 @@ import math
 import random
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Tuple
+from collections import defaultdict
 
 C_MS = 299_792.458  
 
@@ -124,6 +125,11 @@ class Simulation:
         self.event_queue: List[Event] = []
         self.now = 0.0
 
+        self.graph: Dict[int, List[Tuple[int, float]]] = defaultdict(list)
+        for (a, b), ch in self.channels.items():
+            weight = ch.geo_delay_ms + ch.extra_delay_ms
+            self.graph[a].append((b, weight))
+
         # метрики
         self.sent = self.delivered = self.lost = 0
         self.delay_sum = self.delay_sq_sum = 0.0
@@ -133,7 +139,11 @@ class Simulation:
     # API для генераторов/каналов
     def on_packet_created(self, pkt: Packet):
         self.sent += 1
-        self._forward(pkt, self.channels[(pkt.src, pkt.dst)])
+        path = self._find_best_path(pkt.src, pkt.dst)
+        if not path:
+            self.lost += 1
+            return
+        self._send_packet(pkt, path, 0, 0.0)
 
     def _forward(self, pkt: Packet, ch: Channel):
         if ch.is_lost() or ch._queue_overflow(self.now):
@@ -142,17 +152,62 @@ class Simulation:
         delay = ch.transmit_delay(self.now)
         self.schedule(self.now + delay, 0, lambda: self._on_delivered(pkt, delay))
 
+    def _send_packet(self, pkt: Packet, path: List[int], index: int, acc_delay: float):
+        if index == len(path) - 1:
+            self._on_delivered(pkt, acc_delay)
+            return
+        ch = self.channels[(path[index], path[index + 1])]
+        if ch.is_lost() or ch._queue_overflow(self.now):
+            self.lost += 1
+            return
+        delay = ch.transmit_delay(self.now)
+        self.schedule(
+            self.now + delay,
+            0,
+            lambda: self._send_packet(pkt, path, index + 1, acc_delay + delay),
+        )
+
     def _on_delivered(self, pkt: Packet, delay_ms: float):
         self.delivered += 1
         self.delay_sum += delay_ms
         self.delay_sq_sum += delay_ms ** 2
 
+    def _find_best_path(self, src: int, dst: int) -> List[int] | None:
+        queue: List[Tuple[float, int]] = [(0.0, src)]
+        dist: Dict[int, float] = {src: 0.0}
+        prev: Dict[int, int] = {}
+        while queue:
+            d, u = heapq.heappop(queue)
+            if u == dst:
+                break
+            if d > dist.get(u, float("inf")):
+                continue
+            for v, w in self.graph.get(u, []):
+                nd = d + w
+                if nd < dist.get(v, float("inf")):
+                    dist[v] = nd
+                    prev[v] = u
+                    heapq.heappush(queue, (nd, v))
+        if dst not in dist:
+            return None
+        path = [dst]
+        while path[-1] != src:
+            path.append(prev[path[-1]])
+        path.reverse()
+        return path
+
     # обработка попытки вызова
     def on_call_attempt(self, src_id: int, dst_id: int):
         self.call_attempts += 1
-        ch = self.channels[(src_id, dst_id)]
-        if ch.is_call_lost():
+        path = self._find_best_path(src_id, dst_id)
+        if not path:
             self.call_failures += 1
+            return
+        for i in range(len(path) - 1):
+            ch = self.channels[(path[i], path[i + 1])]
+            if ch.is_call_lost():
+                self.call_failures += 1
+                return
 
     # движок событий
     def schedule(self, time_ms: float, priority: int, action: Callable):
