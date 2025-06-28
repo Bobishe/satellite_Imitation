@@ -41,15 +41,39 @@ class Event:
 
 # ---------- каналы ------------------------------------------------------------
 class Channel:
-    def __init__(self, a: Node, b: Node, extra_delay_ms: float = 0.0, loss_prob: float = 0.0):
+    def __init__(self,
+                 a: Node,
+                 b: Node,
+                 extra_delay_ms: float = 0.0,
+                 loss_prob: float = 0.0,
+                 rate_pps: float | None = None,
+                 queue_limit: int | None = None):
         self.a, self.b = a, b
         self.extra_delay_ms = extra_delay_ms
         self.loss_prob = loss_prob
+        self.rate_pps = rate_pps
+        self.queue_limit = queue_limit
+
         self.distance_km = _haversine_km(a.lat_deg, a.lon_deg, b.lat_deg, b.lon_deg) + abs(a.alt_km - b.alt_km)
         self.geo_delay_ms = self.distance_km / C_MS
 
-    def transmit_delay(self) -> float:
-        return self.geo_delay_ms + self.extra_delay_ms
+        self.busy_until_ms = 0.0
+        self.service_ms = 1000.0 / rate_pps if rate_pps else 0.0
+
+    def transmit_delay(self, now_ms: float) -> float:
+        queue_delay = 0.0
+        if self.rate_pps:
+            queue_delay = max(self.busy_until_ms - now_ms, 0.0)
+            start_ms = now_ms + queue_delay
+            self.busy_until_ms = start_ms + self.service_ms
+        return queue_delay + self.service_ms + self.geo_delay_ms + self.extra_delay_ms
+
+    def _queue_overflow(self, now_ms: float) -> bool:
+        if self.queue_limit is None or not self.rate_pps:
+            return False
+        backlog_ms = max(self.busy_until_ms - now_ms, 0.0)
+        backlog_pkts = math.ceil(backlog_ms / self.service_ms) if self.service_ms else 0
+        return backlog_pkts >= self.queue_limit
 
     def is_lost(self) -> bool:
         return random.random() < self.loss_prob
@@ -88,10 +112,10 @@ class Simulation:
         self._forward(pkt, self.channels[(pkt.src, pkt.dst)])
 
     def _forward(self, pkt: Packet, ch: Channel):
-        if ch.is_lost():
+        if ch.is_lost() or ch._queue_overflow(self.now):
             self.lost += 1
             return
-        delay = ch.transmit_delay()
+        delay = ch.transmit_delay(self.now)
         self.schedule(self.now + delay, 0, lambda: self._on_delivered(pkt, delay))
 
     def _on_delivered(self, pkt: Packet, delay_ms: float):
@@ -134,10 +158,16 @@ def _haversine_km(lat1, lon1, lat2, lon2):
 
 # ---------- демонстрация ------------------------------------------------------
 if __name__ == "__main__":
-    # Два узла: Москва → Санкт-Петербург, канал 2 мс + 1 % потерь, 10 pkt/s, 30 с
+    # Два узла: Москва → Санкт-Петербург, канал 2 мс + 1 % потерь.
+    # Пропускная способность 5 pkt/s, очередь на 20 пакетов,
+    # генератор выдает 10 pkt/s в течение 30 секунд.
     n0 = Node(0, 55.751244, 37.618423)
     n1 = Node(1, 59.93106, 30.36057)
-    ch = Channel(n0, n1, extra_delay_ms=2.0, loss_prob=0.01)
+    ch = Channel(n0, n1,
+                 extra_delay_ms=2.0,
+                 loss_prob=0.01,
+                 rate_pps=5,
+                 queue_limit=20)
     sim = Simulation([n0, n1], {(0, 1): ch}, end_time_ms=30_000.0)
     PoissonGenerator(rate_pps=10, src=n0, dst=n1, sim=sim)
     sim.run()
