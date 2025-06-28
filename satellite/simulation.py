@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Tuple
 from collections import defaultdict
 
-C_MS = 299_792.458  
+C_MS = 299.792458
 
 # ---------- базовые структуры -------------------------------------------------
 @dataclass
