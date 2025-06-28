@@ -23,7 +23,7 @@ class Node:
     node_id: int
     lat_deg: float
     lon_deg: float
-    alt_km: float = 0.0
+    alt_km: float
 
 
 @dataclass
@@ -204,7 +204,7 @@ def build_simulation(cfg: dict) -> Simulation:
     nodes: List[Node] = []
     node_map: Dict[int, Node] = {}
     for n in cfg.get("nodes", []):
-        node = Node(n["id"], n["lat"], n["lon"], n.get("alt", 0.0))
+        node = Node(n["id"], n["lat"], n["lon"], n["alt"])
         nodes.append(node)
         node_map[node.node_id] = node
 
