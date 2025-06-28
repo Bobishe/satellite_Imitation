@@ -3,7 +3,9 @@
 """
 
 import matplotlib.pyplot as plt
-import simple_sim                           
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import tkinter as tk
+import simple_sim
 
 # ── расширение симулятора ─────────────────────────────────────────────────────
 class MonitoringSimulation(simple_sim.Simulation):
@@ -57,11 +59,11 @@ class MonitoringSimulation(simple_sim.Simulation):
             self._maybe_close_bin()
         super().schedule(time_ms, priority, wrapped)
 
-# ── основной запуск ───────────────────────────────────────────────────────────
-def main(cfg_path="config.json"):
-    cfg = simple_sim.load_config(cfg_path)
+
+# ── запуск модели и получение временного ряда ─────────────────────────────────
+def run_simulation(cfg):
+    """Run monitoring simulation and return collected timeline."""
     sim = simple_sim.build_simulation(cfg)
-    # заменяем базовый симулятор на мониторинговый
     sim = MonitoringSimulation(
         list(sim.nodes.values()),
         sim.channels,
@@ -70,19 +72,21 @@ def main(cfg_path="config.json"):
         metrics_fname=sim.metrics_fname,
     )
 
-    # генераторы заново поскольку они привязаны к экземпляру симулятора
     for gen in cfg.get("packet_generators", []):
         simple_sim.PoissonGenerator(gen["rate_pps"], sim.nodes[gen["src"]], sim.nodes[gen["dst"]], sim)
 
     for gen in cfg.get("call_generators", []):
         simple_sim.CallGenerator(gen["rate_cps"], sim.nodes[gen["src"]], sim.nodes[gen["dst"]], sim)
 
-    sim.run()                                          # запуск модели
+    sim.run()
+    return sim.timeline
 
-    # ── визуализация ──────────────────────────────────────────────────────────
-    t = [p["t"] for p in sim.timeline]
-    delay = [p["delay"] for p in sim.timeline]
-    loss = [p["loss"] for p in sim.timeline]
+
+def show_results(timeline):
+    """Display charts from collected timeline."""
+    t = [p["t"] for p in timeline]
+    delay = [p["delay"] for p in timeline]
+    loss = [p["loss"] for p in timeline]
 
     fig, axs = plt.subplots(2, 1, figsize=(8, 6), sharex=True)
     axs[0].plot(t, delay)
@@ -96,6 +100,50 @@ def main(cfg_path="config.json"):
 
     plt.tight_layout()
     plt.show()
+
+
+def _on_start(root, cfg):
+    """Callback for the start button."""
+    root.destroy()
+    timeline = run_simulation(cfg)
+    show_results(timeline)
+
+
+def launch_ui(cfg):
+    """Show network topology and start button."""
+    root = tk.Tk()
+    root.title("Network topology")
+
+    fig = plt.Figure(figsize=(5, 4))
+    ax = fig.add_subplot(111)
+
+    nodes = cfg.get("nodes", [])
+    positions = {n["id"]: (n["lon"], n["lat"]) for n in nodes}
+    ax.scatter([p[0] for p in positions.values()], [p[1] for p in positions.values()])
+
+    for ch in cfg.get("channels", []):
+        a = positions[ch["src"]]
+        b = positions[ch["dst"]]
+        ax.plot([a[0], b[0]], [a[1], b[1]], "k--")
+
+    ax.set_xlabel("долгота")
+    ax.set_ylabel("широта")
+    ax.set_title("Топология сети")
+
+    canvas = FigureCanvasTkAgg(fig, master=root)
+    canvas.draw()
+    canvas.get_tk_widget().pack()
+
+    info = f"Узлов: {len(nodes)}\nКаналов: {len(cfg.get('channels', []))}\nВремя: {cfg.get('end_time_ms',0)} мс"
+    tk.Label(root, text=info).pack(pady=5)
+    tk.Button(root, text="Запустить имитацию", command=lambda: _on_start(root, cfg)).pack(pady=5)
+
+    root.mainloop()
+
+
+def main(cfg_path="config.json"):
+    cfg = simple_sim.load_config(cfg_path)
+    launch_ui(cfg)
 
 if __name__ == "__main__":
     import argparse
