@@ -20,11 +20,20 @@ class MonitoringSimulation(simple_sim.Simulation):
         self.next_edge = self.now + self.bin_ms
         self.bin_sent = self.bin_delivered = self.bin_lost = 0
         self.bin_delay_sum = 0.0
+        self.bin_call_attempts = self.bin_call_failures = 0
 
     #  фиксируем отправку
     def on_packet_created(self, pkt):
         self.bin_sent += 1
         super().on_packet_created(pkt)
+
+    def on_call_attempt(self, src_id, dst_id):
+        self.bin_call_attempts += 1
+        self.call_attempts += 1
+        ch = self.channels[(src_id, dst_id)]
+        if ch.is_call_lost():
+            self.call_failures += 1
+            self.bin_call_failures += 1
 
     # переопределяем пересылку чтобы учитывать потерянные пакеты
     def _forward(self, pkt, ch):
@@ -46,10 +55,22 @@ class MonitoringSimulation(simple_sim.Simulation):
         if self.now >= self.next_edge:
             avg_delay = (self.bin_delay_sum / self.bin_delivered) if self.bin_delivered else 0.0
             loss_rate = (self.bin_lost / self.bin_sent) if self.bin_sent else 0.0
+            call_loss = (self.bin_call_failures / self.bin_call_attempts) if self.bin_call_attempts else 0.0
+            throughput = self.bin_delivered * 1000.0 / self.bin_ms
             self.timeline.append(
-                {"t": self.next_edge / 1000.0,        # секунда
-                 "delay": avg_delay,                  # мс
-                 "loss": loss_rate})                  # 0‒1
+                {
+                    "t": self.next_edge / 1000.0,        # секунда
+                    "delay": avg_delay,                  # мс
+                    "loss": loss_rate,                   # 0‒1
+                    "call_loss": call_loss,              # 0‒1
+                    "throughput": throughput,            # pkt/s
+                    "sent": self.bin_sent,
+                    "delivered": self.bin_delivered,
+                    "lost": self.bin_lost,
+                    "call_attempts": self.bin_call_attempts,
+                    "call_failures": self.bin_call_failures,
+                }
+            )
             self._reset_bin()
 
     # оборачиваем каждое действие событием проверки бин-среза
@@ -85,19 +106,38 @@ def run_simulation(cfg):
 def show_results(timeline):
     """Display charts from collected timeline."""
     t = [p["t"] for p in timeline]
-    delay = [p["delay"] for p in timeline]
-    loss = [p["loss"] for p in timeline]
-
-    fig, axs = plt.subplots(2, 1, figsize=(8, 6), sharex=True)
-    axs[0].plot(t, delay)
-    axs[0].set_ylabel("сред. задержка, мс")
-    axs[0].grid(True)
-
-    axs[1].plot(t, loss)
-    axs[1].set_xlabel("время, с")
-    axs[1].set_ylabel("доля потерь")
-    axs[1].grid(True)
-
+    ordered = [
+        "delay",
+        "loss",
+        "call_loss",
+        "throughput",
+        "sent",
+        "delivered",
+        "lost",
+        "call_attempts",
+        "call_failures",
+    ]
+    keys = [k for k in ordered if k in timeline[0]]
+    n = len(keys)
+    fig, axs = plt.subplots(n, 1, figsize=(8, 3 * n), sharex=True)
+    if n == 1:
+        axs = [axs]
+    labels = {
+        "delay": "сред. задержка, мс",
+        "loss": "доля потерь",
+        "call_loss": "доля потерь вызовов",
+        "throughput": "доставлено, пак/с",
+        "sent": "отправлено",
+        "delivered": "доставлено",
+        "lost": "потеряно",
+        "call_attempts": "попытки вызова",
+        "call_failures": "неудачные вызовы",
+    }
+    for ax, key in zip(axs, keys):
+        ax.plot(t, [p[key] for p in timeline])
+        ax.set_ylabel(labels.get(key, key))
+        ax.grid(True)
+    axs[-1].set_xlabel("время, с")
     plt.tight_layout()
     plt.show()
 
