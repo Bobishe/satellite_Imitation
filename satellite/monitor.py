@@ -5,7 +5,7 @@
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import tkinter as tk
-import simple_sim
+from . import simulation as simple_sim
 
 # ── расширение симулятора ─────────────────────────────────────────────────────
 class MonitoringSimulation(simple_sim.Simulation):
