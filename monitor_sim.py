@@ -26,11 +26,11 @@ class MonitoringSimulation(simple_sim.Simulation):
 
     # переопределяем пересылку чтобы учитывать потерянные пакеты
     def _forward(self, pkt, ch):
-        if ch.is_lost():
+        if ch.is_lost() or ch._queue_overflow(self.now):
             self.lost += 1
             self.bin_lost += 1
             return
-        delay = ch.transmit_delay()
+        delay = ch.transmit_delay(self.now)
         self.schedule(self.now + delay, 0, lambda: self._on_delivered(pkt, delay))
 
     # доставка пакета — считаем задержку
